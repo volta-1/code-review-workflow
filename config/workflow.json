@@ -1,0 +1,17 @@
+{
+  "start": "coder",
+  "max_loops": 3,
+  "ablation": {
+    "rule_anchor": true,
+    "evidence_gate": true,
+    "contract_check": true,
+    "checkpoint_verify": true,
+    "anti_pingpong": true
+  },
+  "edges": [
+    {"from": "coder", "to": "reviewer"},
+    {"from": "reviewer", "to": "END", "condition": "score >= 85"},
+    {"from": "reviewer", "to": "fixer"},
+    {"from": "fixer", "to": "reviewer"}
+  ]
+}

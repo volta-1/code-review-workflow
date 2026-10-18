@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多 Agent 代码审查工作流 · 可视化编排</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --surface: #161616;
+    --surface-2: #1f1f1f;
+    --line: #2c2c2c;
+    --text: #f5f5f5;
+    --dim: #8a8a8a;
+    --accent: #ff5f1f;
+    --green: #3fb950;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --yellow: #d29922;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SF Mono", "Cascadia Code", Consolas, "PingFang SC", "Microsoft YaHei", monospace;
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+  header .sub { color: var(--dim); font-size: 12px; }
+  header .badge {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 3px 10px;
+    border-radius: 999px;
+  }
+
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(420px, 5fr) minmax(340px, 4fr);
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .panel { padding: 24px 28px; }
+  .panel + .panel { border-left: 1px solid var(--line); }
+  @media (max-width: 900px) { .panel + .panel { border-left: none; border-top: 1px solid var(--line); } }
+
+  .panel-title {
+    font-size: 12px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 16px;
+  }
+
+  /* ---- 节点图（由 config/workflow.json 动态生成） ---- */
+  #graph { width: 100%; height: auto; display: block; }
+  .node-box {
+    fill: var(--surface);
+    stroke: var(--line);
+    stroke-width: 1.5;
+    transition: stroke 0.25s, fill 0.25s;
+  }
+  .node.active .node-box { stroke: var(--accent); fill: #241610; }
+  .node.done .node-box { stroke: var(--green); }
+  .node-label { fill: var(--text); font-size: 14px; font-weight: 600; }
+  .node-sub { fill: var(--dim); font-size: 10.5px; }
+  .node.active .node-sub { fill: var(--accent); }
+  .edge {
+    stroke: var(--line);
+    stroke-width: 1.5;
+    fill: none;
+    transition: stroke 0.25s;
+  }
+  .edge.lit { stroke: var(--accent); }
+  .edge-label { fill: var(--dim); font-size: 10.5px; }
+  .edge-label.lit { fill: var(--accent); }
+  .end-circle { fill: none; stroke: var(--line); stroke-width: 1.5; transition: stroke 0.25s; }
+  .end-circle.lit { stroke: var(--green); }
+  .end-text { fill: var(--dim); font-size: 11px; }
+  .msg-dot { fill: var(--purple); }
+
+  /* ---- 回放控制 ---- */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 6px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--line);
+    padding: 7px 16px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { color: #fff; opacity: 0.9; }
+  .btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+  .step-info { color: var(--dim); font-size: 12px; margin-left: auto; }
+
+  input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+
+  /* ---- 状态卡 ---- */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin: 18px 0;
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat .k { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .stat .v { font-size: 20px; font-weight: 700; }
+  .stat .v.acc { color: var(--accent); }
+
+  /* ---- 分数曲线 ---- */
+  #scoreChart { width: 100%; height: 90px; display: block; }
+  .threshold-line { stroke: var(--yellow); stroke-dasharray: 4 4; stroke-width: 1; }
+  .threshold-text { fill: var(--yellow); font-size: 9.5px; }
+  .score-line { stroke: var(--accent); stroke-width: 2; fill: none; }
+  .score-dot { fill: var(--accent); }
+  .score-dot.pending { fill: var(--surface-2); stroke: var(--line); }
+
+  /* ---- 日志流 ---- */
+  #log {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    height: 300px;
+    overflow-y: auto;
+    font-size: 12.5px;
+    line-height: 1.9;
+  }
+  #log .entry { opacity: 0; animation: fadeIn 0.3s forwards; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  #log .t-info { color: var(--dim); }
+  #log .t-node { color: var(--blue); font-weight: 600; }
+  #log .t-msg { color: var(--purple); }
+  #log .t-cond { color: var(--yellow); }
+  #log .t-end { color: var(--green); font-weight: 600; }
+
+  /* ---- 消息流 ---- */
+  .msg-list { margin-top: 8px; }
+  .msg {
+    border-left: 2px solid var(--line);
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    border-radius: 0 8px 8px 0;
+    opacity: 0;
+    animation: fadeIn 0.3s forwards;
+  }
+  .msg .route { font-size: 11.5px; color: var(--purple); margin-bottom: 3px; }
+  .msg .body { font-size: 12.5px; color: var(--text); line-height: 1.6; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 14px 32px;
+    color: var(--dim);
+    font-size: 11.5px;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  footer .right { margin-left: auto; }
+  #fileInput { display: none; }
+
+  /* ---- 机制徽章与触发统计 ---- */
+  .mech-panel { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--dim);
+    background: var(--surface);
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .chip .n { font-weight: 700; color: var(--text); }
+  .chip.hit { border-color: currentColor; }
+  .c-anchor   { color: var(--accent); }
+  .c-contract { color: #f47067; }
+  .c-pingpong { color: var(--yellow); }
+  .c-verify   { color: var(--blue); }
+  .c-rollback { color: var(--yellow); }
+  .c-stop     { color: #f47067; }
+  .c-compress { color: var(--purple); }
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 0 7px;
+    margin-right: 6px;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+    vertical-align: 1px;
+  }
+  .log-entry-mech { background: rgba(255, 255, 255, 0.03); border-radius: 6px; padding: 0 6px; margin: 0 -6px; }
+
+  /* ---- 节点点击详情 / 消息气泡 ---- */
+  .panel { position: relative; }
+  .float-tip {
+    position: absolute;
+    z-index: 10;
+    max-width: 300px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 12px;
+    line-height: 1.7;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    display: none;
+  }
+  .float-tip.show { display: block; }
+  .float-tip .tip-title { font-weight: 700; margin-bottom: 4px; }
+  .float-tip .tip-sub { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
+  .float-tip .tip-line { color: var(--text); }
+  .float-tip .tip-line.dim { color: var(--dim); }
+  #bubble {
+    pointer-events: none;
+    border-color: var(--purple);
+    color: var(--text);
+    max-width: 260px;
+  }
+  #bubble::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    margin-left: -6px;
+    border: 6px solid transparent;
+    border-top-color: var(--purple);
+    border-bottom: none;
+  }
+  .node { cursor: pointer; }
+  .score-area { fill: rgba(255, 95, 31, 0.07); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>多 Agent 代码审查工作流</h1>
+  <span class="sub">可视化编排 · 编码 → 审查 ⇄ 修复</span>
+  <span class="badge">Homework 2 · Simple Workflow MVP</span>
+</header>
+
+<main>
+  <!-- 左：流程图 + 回放 -->
+  <section class="panel">
+    <div class="panel-title">Workflow Graph / 流程编排（由 config/workflow.json 生成）</div>
+    <svg id="graph" viewBox="0 0 560 420" aria-label="工作流图"></svg>
+
+    <div class="controls">
+      <button class="btn primary" id="btnPlay">▶ 播放</button>
+      <button class="btn" id="btnStep">单步</button>
+      <button class="btn" id="btnReset">重置</button>
+      <button class="btn" id="btnLoad">加载真实日志…</button>
+      <input type="file" id="fileInput" accept=".json">
+      <span class="step-info" id="stepInfo">待开始</span>
+    </div>
+    <input type="range" id="scrubber" min="0" max="0" value="0" step="1">
+
+    <div class="float-tip" id="nodeTip">
+      <div class="tip-title" id="tipTitle"></div>
+      <div class="tip-sub" id="tipSub"></div>
+      <div id="tipBody"></div>
+    </div>
+    <div class="float-tip" id="bubble"></div>
+  </section>
+
+  <!-- 右：状态 + 日志 + 消息 -->
+  <section class="panel">
+    <div class="panel-title">Runtime / 运行时状态</div>
+    <div class="stat-row">
+      <div class="stat"><div class="k">当前节点</div><div class="v" id="statNode">—</div></div>
+      <div class="stat"><div class="k">审查轮次</div><div class="v" id="statRound">0</div></div>
+      <div class="stat"><div class="k">当前评分</div><div class="v acc" id="statScore">—</div></div>
+    </div>
+
+    <div class="panel-title">Score / 评分曲线</div>
+    <svg id="scoreChart" viewBox="0 0 400 90" preserveAspectRatio="none"></svg>
+
+    <div class="panel-title" style="margin-top:18px">Mechanisms / 机制触发统计</div>
+    <div class="mech-panel" id="mechPanel"></div>
+
+    <div class="panel-title">Execution Log / 执行日志</div>
+    <div id="log"></div>
+
+    <div class="panel-title" style="margin-top:18px">Messages / Agent 间消息</div>
+    <div class="msg-list" id="msgList"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="configSource">流程图由 config/workflow.json 动态生成（节点 + 有向边 + 条件）</span>
+  <span>高亮日志行 = 机制触发（锚点纠偏 / 契约拦截 / 防踢皮球…），点击节点看本轮动作</span>
+  <span class="right">加载 logs/workflow_*.json 可回放你的真实运行</span>
+</footer>
+
+<script>
+"use strict";
+
+// ================= 配置（与 config/workflow.json 同步的内嵌快照） =================
+// http 部署时页面会尝试实时读取 ../config/workflow.json 覆盖本快照，
+// 因此修改配置文件后刷新页面，流程图会跟着变——图和配置严格一一对应。
+const WORKFLOW_CONFIG = {
+  "start": "coder",
+  "max_loops": 3,
+  "ablation": {
+    "rule_anchor": true,
+    "evidence_gate": true,
+    "contract_check": true,
+    "checkpoint_verify": true,
+    "anti_pingpong": true
+  },
+  "edges": [
+    {"from": "coder", "to": "reviewer"},
+    {"from": "reviewer", "to": "END", "condition": "score >= 85"},
+    {"from": "reviewer", "to": "fixer"},
+    {"from": "fixer", "to": "reviewer"}
+  ]
+};
+
+// 节点的显示名与职责说明（来自各 Agent 类的 name 属性，非流程结构信息）
+const NODE_META = {
+  coder:    { name: "编码Agent", sub: "需求 → 三重自检 → 交付",
+              desc: "根据需求生成代码，交付前跑三重自检：运行验证 → 规则自查 → 检查点断言，全过才交付。" },
+  reviewer: { name: "审查Agent", sub: "双引擎打分 · 核销 · 回滚",
+              desc: "规则引擎 + LLM 双引擎审查；评分受规则锚点约束；issue 逐条核销；分数回落回滚最优版本；停滞时请求提前终止。" },
+  fixer:    { name: "修复Agent", sub: "协商决策 · 回归验证",
+              desc: "对审查意见逐条决策：采纳或反驳（反驳必须附理由 + 代码引用）；修复后跑运行验证和检查点回归。" },
+};
+
+// 机制识别表：日志文本命中关键词 → 记为对应机制触发（与 Design.md 的机制一一对应）
+const MECHS = [
+  { key: "anchor",   label: "评分锚点", cls: "c-anchor",
+    test: (t) => t.includes("评分锚点生效") },
+  { key: "contract", label: "契约拦截", cls: "c-contract",
+    test: (t) => t.includes("不符合契约") || t.includes("自检未通过") },
+  { key: "pingpong", label: "防踢皮球", cls: "c-pingpong",
+    test: (t) => t.includes("强制按采纳处理") },
+  { key: "verify",   label: "验证链",   cls: "c-verify",
+    test: (t) => t.includes("自检") || t.includes("回归验证") || t.includes("运行验证") },
+  { key: "rollback", label: "版本回滚", cls: "c-rollback",
+    test: (t) => t.includes("回滚") },
+  { key: "stop",     label: "提前终止", cls: "c-stop",
+    test: (t) => t.includes("分数停滞") || t.includes("强制结束") },
+  { key: "compress", label: "上下文压缩", cls: "c-compress",
+    test: (t) => t.includes("压缩为摘要") },
+];
+const mechCount = {};   // key -> 已触发次数（回放过程中累计）
+const NAME_TO_ID = Object.fromEntries(
+  Object.entries(NODE_META).map(([id, m]) => [m.name, id]));
+
+// ================= 图布局：从配置计算 =================
+const SVG_NS = "http://www.w3.org/2000/svg";
+const NODE_W = 200, NODE_H = 66, LAYER_GAP = 112, TOP = 32, CENTER_X = 260;
+
+function computeLayout(cfg) {
+  // BFS 分层：从起点沿出边走，首次到达的边是前向边；指向已访问节点的是回环边
+  const layer = { [cfg.start]: 0 };
+  const visited = new Set([cfg.start]);
+  const fwd = [], back = [], toEnd = [];
+  const queue = [cfg.start];
+  while (queue.length) {
+    const n = queue.shift();
+    cfg.edges.filter((e) => e.from === n).forEach((e) => {
+      if (e.to === "END") { toEnd.push(e); return; }
+      if (!visited.has(e.to)) {
+        visited.add(e.to);
+        layer[e.to] = layer[n] + 1;
+        fwd.push(e);
+        queue.push(e.to);
+      } else {
+        back.push(e);
+      }
+    });
+  }
+  const nodeY = (id) => TOP + layer[id] * LAYER_GAP;
+  return { layer, fwd, back, toEnd, nodeY };
+}
+
+function el(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+function textEl(attrs, text) {
+  const t = el("text", attrs);
+  t.textContent = text;
+  return t;
+}
+
+const EDGE_ELEMENTS = {};   // "from>to" -> {path, label}
+
+function buildGraph(cfg) {
+  const svg = $("graph");
+  svg.innerHTML = "";
+  for (const k of Object.keys(EDGE_ELEMENTS)) delete EDGE_ELEMENTS[k];
+
+  // 箭头标记
+  const defs = el("defs", {});
+  for (const [id, color] of [["arrow", "#2c2c2c"], ["arrow-lit", "#ff5f1f"]]) {
+    const marker = el("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5,
+      markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    marker.appendChild(el("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: color }));
+    defs.appendChild(marker);
+  }
+  svg.appendChild(defs);
+
+  const { layer, fwd, back, toEnd, nodeY } = computeLayout(cfg);
+  const maxLayer = Math.max(...Object.values(layer));
+  svg.setAttribute("viewBox", `0 0 560 ${TOP + (maxLayer + 1) * LAYER_GAP + 20}`);
+
+  const addEdge = (from, to, d, label, labelPos) => {
+    const path = el("path", { class: "edge", id: `edge-${from}-${to}`, d, "marker-end": "url(#arrow)" });
+    svg.appendChild(path);
+    let labelEl = null;
+    if (label) {
+      labelEl = textEl({ class: "edge-label", id: `el-${from}-${to}`, x: labelPos.x, y: labelPos.y }, label);
+      svg.appendChild(labelEl);
+    }
+    EDGE_ELEMENTS[`${from}>${to}`] = { path, label: labelEl };
+  };
+
+  // 前向边：源节点底边中点 → 目标节点顶边中点
+  fwd.forEach((e) => {
+    const y1 = nodeY(e.from) + NODE_H, y2 = nodeY(e.to);
+    addEdge(e.from, e.to, `M ${CENTER_X} ${y1} L ${CENTER_X} ${y2}`,
+      e.condition || "", { x: CENTER_X + 12, y: (y1 + y2) / 2 + 4 });
+  });
+
+  // 回环边：从源节点左侧绕到目标节点左侧
+  back.forEach((e) => {
+    const sy = nodeY(e.from) + NODE_H / 2, ty = nodeY(e.to) + NODE_H / 2;
+    const x1 = CENTER_X - NODE_W / 2, bend = x1 - 92;
+    addEdge(e.from, e.to,
+      `M ${x1} ${sy} C ${bend} ${sy}, ${bend} ${ty}, ${x1} ${ty}`,
+      e.condition || "回环", { x: bend - 10, y: (sy + ty) / 2 + 4 });
+  });
+
+  // END 边与 END 节点
+  if (toEnd.length) {
+    const first = toEnd[0];
+    const endX = CENTER_X + NODE_W / 2 + 96;
+    const endY = nodeY(first.from) + NODE_H / 2 + 52;
+    toEnd.forEach((e) => {
+      const sy = nodeY(e.from) + NODE_H / 2;
+      const x1 = CENTER_X + NODE_W / 2;
+      addEdge(e.from, "END",
+        `M ${x1} ${sy} C ${x1 + 70} ${sy}, ${endX - 40} ${endY - 60}, ${endX - 12} ${endY - 22}`,
+        e.condition || "", { x: x1 + 66, y: sy - 10 });
+    });
+    const g = el("g", { id: "node-end" });
+    g.appendChild(el("circle", { class: "end-circle", id: "node-end-c", cx: endX, cy: endY, r: 24 }));
+    g.appendChild(textEl({ class: "end-text", x: endX, y: endY + 4, "text-anchor": "middle" }, "END 报告"));
+    svg.appendChild(g);
+  }
+
+  // 节点（最后画，盖在边上面）
+  Object.keys(layer).forEach((id) => {
+    const meta = NODE_META[id] || { name: id, sub: "" };
+    const g = el("g", { class: "node", id: `node-${id}` });
+    g.appendChild(el("rect", { class: "node-box",
+      x: CENTER_X - NODE_W / 2, y: nodeY(id), width: NODE_W, height: NODE_H, rx: 10 }));
+    g.appendChild(textEl({ class: "node-label", x: CENTER_X, y: nodeY(id) + 28, "text-anchor": "middle" }, meta.name));
+    g.appendChild(textEl({ class: "node-sub", x: CENTER_X, y: nodeY(id) + 48, "text-anchor": "middle" }, meta.sub));
+    svg.appendChild(g);
+  });
+}
+
+// ================= 消息沿边流动动画 =================
+function animateMessage(fromName, toName, content) {
+  const f = NAME_TO_ID[fromName], t = NAME_TO_ID[toName];
+  if (!f || !t) return;
+  const entry = EDGE_ELEMENTS[`${f}>${t}`];
+  if (!entry) return;
+  const path = entry.path;
+  const len = path.getTotalLength();
+  const dot = el("circle", { class: "msg-dot", r: 5 });
+  $("graph").appendChild(dot);
+  const t0 = performance.now();
+  (function tick(now) {
+    const p = Math.min((now - t0) / 800, 1);
+    const pt = path.getPointAtLength(p * len);
+    dot.setAttribute("cx", pt.x);
+    dot.setAttribute("cy", pt.y);
+    if (p < 1) requestAnimationFrame(tick);
+    else { dot.remove(); showBubble(t, content); }
+  })(t0);
+}
+
+// 消息到达时在目标节点上方弹一个气泡，显示消息摘要
+let bubbleTimer = null;
+function showBubble(nodeId, content) {
+  if (!content) return;
+  const bubble = $("bubble");
+  bubble.textContent = content.length > 60 ? content.slice(0, 60) + "…" : content;
+  const panel = bubble.parentElement.getBoundingClientRect();
+  const node = $(`node-${nodeId}`);
+  if (!node) return;
+  const r = node.getBoundingClientRect();
+  bubble.classList.add("show");
+  // 先显示出来量尺寸，再居中定位到节点上方
+  const bw = bubble.offsetWidth;
+  let left = r.left - panel.left + r.width / 2 - bw / 2;
+  left = Math.max(8, Math.min(left, panel.width - bw - 8));
+  bubble.style.left = left + "px";
+  bubble.style.top = (r.top - panel.top - bubble.offsetHeight - 10) + "px";
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  bubbleTimer = setTimeout(() => bubble.classList.remove("show"), 2000);
+}
+
+// ================= 内嵌演示数据（file:// 双击可用） =================
+const DEMO_DATA = {
+ "records": [
+  {
+   "event": "info",
+   "text": "工作流启动，起点：[coder]，循环上限：3 次/节点"
+  },
+  {
+   "event": "message",
+   "from": "编码Agent",
+   "to": "审查Agent",
+   "type": "code"
+  },
+  {
+   "event": "info",
+   "text": "交付代码 42 行，三重自检全部通过，功能检查点 3 条（已验证）"
+  },
+  {
+   "node": "编码Agent",
+   "round": 1,
+   "start": "13:49:37",
+   "summary": "执行成功"
+  },
+  {
+   "event": "info",
+   "text": "检查点已保存（下一步：reviewer）"
+  },
+  {
+   "event": "info",
+   "text": "开始第 1 轮审查，调用 AST 解析与规则扫描工具..."
+  },
+  {
+   "event": "message",
+   "from": "审查Agent",
+   "to": "工作流",
+   "type": "review"
+  },
+  {
+   "event": "info",
+   "text": "评分 62/100，问题 4 个"
+  },
+  {
+   "node": "审查Agent",
+   "round": 1,
+   "start": "13:49:37",
+   "summary": "执行成功"
+  },
+  {
+   "event": "info",
+   "text": "检查点已保存（下一步：fixer）"
+  },
+  {
+   "event": "info",
+   "text": "意见 #1：✅ 采纳——改用参数化查询，字符串拼接有注入风险"
+  },
+  {
+   "event": "info",
+   "text": "意见 #2：🚫 反驳——第 18 行的下标判断写反了，left > right 时不会触发，建议先补一个边界用例再定级"
+  },
+  {
+   "event": "message",
+   "from": "修复Agent",
+   "to": "审查Agent",
+   "type": "fix_decisions"
+  },
+  {
+   "event": "info",
+   "text": "运行验证：退出码：0"
+  },
+  {
+   "event": "info",
+   "text": "回归验证：退出码：0（3 条功能检查点全过）"
+  },
+  {
+   "node": "修复Agent",
+   "round": 1,
+   "start": "13:49:37",
+   "summary": "执行成功"
+  },
+  {
+   "event": "info",
+   "text": "检查点已保存（下一步：reviewer）"
+  },
+  {
+   "event": "info",
+   "text": "开始第 2 轮审查，调用 AST 解析与规则扫描工具..."
+  },
+  {
+   "event": "info",
+   "text": "评分锚点生效：LLM 给出 93 分，但规则引擎扣分上限为 91 分，按上限计"
+  },
+  {
+   "event": "message",
+   "from": "审查Agent",
+   "to": "工作流",
+   "type": "review"
+  },
+  {
+   "event": "info",
+   "text": "评分 91/100，问题 1 个"
+  },
+  {
+   "node": "审查Agent",
+   "round": 2,
+   "start": "13:49:37",
+   "summary": "执行成功"
+  },
+  {
+   "event": "info",
+   "text": "条件分支：score >= 85 成立 → 走向 [END]"
+  },
+  {
+   "event": "info",
+   "text": "检查点已保存（下一步：END）"
+  }
+ ],
+ "requirement": "写一个命令行 TODO 管理器，支持添加/列出/完成任务",
+ "score_history": [
+  62,
+  91
+ ],
+ "final_score": 91,
+ "rounds": 2,
+ "messages": [
+  {
+   "sender": "编码Agent",
+   "receiver": "审查Agent",
+   "msg_type": "code",
+   "content": "已交付代码（42 行）：TODO 管理器；3 条功能检查点已通过自验"
+  },
+  {
+   "sender": "审查Agent",
+   "receiver": "工作流",
+   "msg_type": "review",
+   "content": "第 1 轮审查完成：62 分，发现 4 个问题"
+  },
+  {
+   "sender": "修复Agent",
+   "receiver": "审查Agent",
+   "msg_type": "fix_decisions",
+   "content": "修复完成：改用参数化查询；采纳 2 条，反驳 1 条（附代码引用）；运行验证与回归验证均通过"
+  },
+  {
+   "sender": "审查Agent",
+   "receiver": "工作流",
+   "msg_type": "review",
+   "content": "第 2 轮审查完成：91 分，发现 1 个问题"
+  }
+ ]
+};
+
+// ================= 数据 =================
+let DATA = null;
+let step = 0;
+let playing = false;
+let timer = null;
+
+const $ = (id) => document.getElementById(id);
+
+async function loadDemo() {
+  DATA = DEMO_DATA;
+  try {
+    if (location.protocol.startsWith("http")) {
+      const res = await fetch("demo_run.json");
+      if (res.ok) DATA = await res.json();
+    }
+  } catch (_) { /* file:// 下静默回退到内嵌数据 */ }
+  reset();
+}
+
+async function loadConfig() {
+  // http 部署时实时读取真实配置文件，保证图与配置严格同步
+  if (!location.protocol.startsWith("http")) return WORKFLOW_CONFIG;
+  for (const url of ["../config/workflow.json", "config/workflow.json"]) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.json();
+    } catch (_) { /* 尝试下一个路径 */ }
+  }
+  return WORKFLOW_CONFIG;
+}
+
+// ================= 渲染 =================
+function clearGraphState() {
+  document.querySelectorAll(".node").forEach((n) => n.classList.remove("active", "done"));
+  document.querySelectorAll(".edge").forEach((e) => {
+    e.classList.remove("lit");
+    e.setAttribute("marker-end", "url(#arrow)");
+  });
+  document.querySelectorAll(".edge-label").forEach((e) => e.classList.remove("lit"));
+  const end = $("node-end-c");
+  if (end) end.classList.remove("lit");
+}
+
+function setActiveNode(name) {
+  document.querySelectorAll(".node").forEach((n) => {
+    const id = n.id.replace("node-", "");
+    const meta = NODE_META[id] || { name: id };
+    if (meta.name === name) { n.classList.add("active"); n.classList.remove("done"); }
+    else if (n.classList.contains("active")) { n.classList.remove("active"); n.classList.add("done"); }
+  });
+  $("statNode").textContent = name || "—";
+}
+
+function lightEdge(fromId, toId) {
+  const entry = EDGE_ELEMENTS[`${fromId}>${toId}`];
+  if (!entry) return;
+  entry.path.classList.add("lit");
+  entry.path.setAttribute("marker-end", "url(#arrow-lit)");
+  if (entry.label) entry.label.classList.add("lit");
+}
+
+// ---- 机制触发统计（右上角 chips） ----
+function buildMechPanel() {
+  const panel = $("mechPanel");
+  panel.innerHTML = "";
+  for (const m of MECHS) {
+    const chip = document.createElement("span");
+    chip.className = `chip ${m.cls}`;
+    chip.id = `chip-${m.key}`;
+    chip.innerHTML = `${m.label} <span class="n">0</span>`;
+    panel.appendChild(chip);
+  }
+}
+
+function resetMechCount() {
+  for (const m of MECHS) mechCount[m.key] = 0;
+  document.querySelectorAll("#mechPanel .chip .n").forEach((n) => { n.textContent = "0"; });
+  document.querySelectorAll("#mechPanel .chip").forEach((c) => c.classList.remove("hit"));
+}
+
+// 命中了哪几条机制，顺手把计数和 chip 高亮更新掉
+function bumpMechs(text) {
+  for (const m of MECHS) {
+    if (!m.test(text)) continue;
+    mechCount[m.key] = (mechCount[m.key] || 0) + 1;
+    const chip = $(`chip-${m.key}`);
+    if (chip) {
+      chip.querySelector(".n").textContent = mechCount[m.key];
+      chip.classList.add("hit");
+    }
+  }
+}
+
+function matchMechs(text) {
+  return MECHS.filter((m) => m.test(text));
+}
+
+function logEntry(rec) {
+  const div = document.createElement("div");
+  div.className = "entry";
+  if (rec.node) {
+    div.innerHTML = `<span class="t-node">▶ ${escapeHtml(rec.node)}</span> <span class="t-info">第 ${rec.round} 轮 · ${escapeHtml(rec.summary || "")}</span>`;
+  } else if (rec.event === "message") {
+    div.innerHTML = `<span class="t-msg">📨 ${escapeHtml(rec.from)} → ${escapeHtml(rec.to)}</span> <span class="t-info">（${escapeHtml(rec.type)}）</span>`;
+  } else {
+    const text = rec.text || "";
+    let cls = "t-info";
+    if (text.includes("条件分支")) cls = "t-cond";
+    if (text.includes("强制结束") || text.includes("END")) cls = "t-end";
+    const hits = matchMechs(text);
+    bumpMechs(text);
+    let badges = "";
+    if (hits.length) {
+      badges = hits.map((m) => `<span class="badge ${m.cls}">${m.label}</span>`).join("");
+      div.classList.add("log-entry-mech");   // 机制相关日志行稍微提亮背景
+      // 节点动作记录也留一份，供点击节点时查看
+      if (currentNodeId && nodeActions[currentNodeId]) {
+        nodeActions[currentNodeId].push({ text, badges });
+      }
+    }
+    div.innerHTML = `${badges}<span class="${cls}">${escapeHtml(text)}</span>`;
+  }
+  $("log").appendChild(div);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+// ---- 节点点击：弹出该 Agent 本轮的动作 ----
+let nodeActions = {};   // 节点 id -> [{text, badges}]，记录该节点本轮干的事
+
+function showNodeTip(nodeId) {
+  const meta = NODE_META[nodeId];
+  if (!meta) return;
+  const tip = $("nodeTip");
+  $("tipTitle").textContent = meta.name;
+  $("tipSub").textContent = meta.sub + "｜" + meta.desc;
+  const acts = (nodeActions[nodeId] || []).slice(-6);
+  $("tipBody").innerHTML = acts.length
+    ? acts.map((a) => `<div class="tip-line">${a.badges}${escapeHtml(a.text)}</div>`).join("")
+    : '<div class="tip-line dim">本轮未触发任何守护机制——LLM 表现规矩，保险丝没有熔断，这正是设计目标</div>';
+  const panel = tip.parentElement.getBoundingClientRect();
+  const node = $(`node-${nodeId}`);
+  const r = node.getBoundingClientRect();
+  tip.classList.add("show");
+  const tw = tip.offsetWidth;
+  let left = r.left - panel.left + r.width / 2 - tw / 2;
+  left = Math.max(8, Math.min(left, panel.width - tw - 8));
+  tip.style.left = left + "px";
+  tip.style.top = (r.bottom - panel.top + 12) + "px";
+}
+
+function hideNodeTip() { $("nodeTip").classList.remove("show"); }
+
+document.addEventListener("click", (e) => {
+  // 点在节点上 → 显示详情；点在别处 → 收起
+  const g = e.target.closest && e.target.closest("g.node");
+  if (g) { showNodeTip(g.id.replace("node-", "")); return; }
+  if (!e.target.closest || !e.target.closest("#nodeTip")) hideNodeTip();
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderMessages() {
+  const list = $("msgList");
+  list.innerHTML = "";
+  const shown = DATA._shownMessages || 0;
+  (DATA.messages || []).slice(0, shown).forEach((m) => {
+    const div = document.createElement("div");
+    div.className = "msg";
+    div.innerHTML = `<div class="route">${escapeHtml(m.sender)} → ${escapeHtml(m.receiver)} · ${escapeHtml(m.msg_type)}</div>
+                     <div class="body">${escapeHtml(m.content)}</div>`;
+    list.appendChild(div);
+  });
+}
+
+function renderScoreCurve(uptoCount) {
+  const svg = $("scoreChart");
+  const scores = DATA.score_history || [];
+  const W = 400, H = 90, PAD = 14;
+  const x = (i) => PAD + (scores.length <= 1 ? 0 : (i / (Math.max(scores.length, 3) - 1)) * (W - 2 * PAD));
+  const y = (v) => H - PAD - (v / 100) * (H - 2 * PAD);
+
+  let html = `<line class="threshold-line" x1="${PAD}" y1="${y(85)}" x2="${W - PAD}" y2="${y(85)}"/>
+              <text class="threshold-text" x="${W - PAD}" y="${y(85) - 4}" text-anchor="end">达标线 85</text>`;
+  const shown = scores.slice(0, uptoCount);
+  if (shown.length) {
+    const pts = shown.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+    if (shown.length > 1) {
+      // 线下补一层淡色面积，曲线看起来不那么空
+      const area = `${pts} ${x(shown.length - 1)},${H - PAD} ${x(0)},${H - PAD}`;
+      html += `<polygon class="score-area" points="${area}"/>`;
+      html += `<polyline class="score-line" points="${pts}"/>`;
+    }
+    shown.forEach((v, i) => {
+      html += `<circle class="score-dot" cx="${x(i)}" cy="${y(v)}" r="4"/>
+               <text fill="#f5f5f5" font-size="10" x="${x(i)}" y="${y(v) - 8}" text-anchor="middle">${v}</text>`;
+    });
+  }
+  for (let i = shown.length; i < scores.length; i++) {
+    html += `<circle class="score-dot pending" cx="${x(i)}" cy="${y(scores[i])}" r="4"/>`;
+  }
+  svg.innerHTML = html;
+}
+
+// ================= 回放核心 =================
+let currentNodeId = null;  // 当前执行到的节点（引擎 id）
+
+function applyStep(rec, animate) {
+  if (rec.node) {
+    setActiveNode(rec.node);
+    currentNodeId = NAME_TO_ID[rec.node] || null;
+    if (currentNodeId) nodeActions[currentNodeId] = [];   // 新轮次，动作记录清零
+    $("statRound").textContent = rec.round;
+    if (rec.node === "审查Agent") {
+      $("statScore").textContent = (DATA.score_history || [])[rec.round - 1] ?? "—";
+      renderScoreCurve(rec.round);
+    }
+  }
+  if (rec.event === "message") {
+    DATA._shownMessages = (DATA._shownMessages || 0) + 1;
+    const msg = (DATA.messages || [])[DATA._shownMessages - 1];
+    if (animate) animateMessage(rec.from, rec.to, msg ? msg.content : "");
+    renderMessages();
+  }
+  if (rec.event === "info" && rec.text) {
+    const m = rec.text.match(/下一步：(\w+)/);
+    if (m && currentNodeId) {
+      lightEdge(currentNodeId, m[1]);
+      if (m[1] === "END") {
+        const end = $("node-end-c");
+        if (end) end.classList.add("lit");
+        setActiveNode(null);
+        $("statNode").textContent = "END";
+      }
+    }
+  }
+  logEntry(rec);
+}
+
+function gotoStep(n) {
+  step = 0;
+  DATA._shownMessages = 0;
+  currentNodeId = null;
+  nodeActions = {};
+  resetMechCount();
+  hideNodeTip();
+  $("bubble").classList.remove("show");
+  clearGraphState();
+  $("log").innerHTML = "";
+  $("msgList").innerHTML = "";
+  $("statNode").textContent = "—";
+  $("statRound").textContent = "0";
+  $("statScore").textContent = "—";
+  renderScoreCurve(0);
+  for (let i = 0; i < n && i < DATA.records.length; i++) {
+    applyStep(DATA.records[i], i === n - 1);  // 只有最新一步播动画，拖动进度条不刷屏
+    step = i + 1;
+  }
+  $("scrubber").value = step;
+  $("stepInfo").textContent = `${step} / ${DATA.records.length} 步`;
+  if (step >= DATA.records.length) stopPlay();
+}
+
+function reset() {
+  stopPlay();
+  $("scrubber").max = DATA.records.length;
+  gotoStep(0);
+  $("stepInfo").textContent = `待开始 · 共 ${DATA.records.length} 步`;
+}
+
+function stopPlay() {
+  playing = false;
+  if (timer) { clearInterval(timer); timer = null; }
+  $("btnPlay").textContent = "▶ 播放";
+}
+
+$("btnPlay").addEventListener("click", () => {
+  if (playing) { stopPlay(); return; }
+  if (step >= DATA.records.length) reset();
+  playing = true;
+  $("btnPlay").textContent = "⏸ 暂停";
+  timer = setInterval(() => {
+    if (step >= DATA.records.length) { stopPlay(); return; }
+    gotoStep(step + 1);
+  }, 900);
+});
+$("btnStep").addEventListener("click", () => gotoStep(Math.min(step + 1, DATA.records.length)));
+$("btnReset").addEventListener("click", reset);
+$("scrubber").addEventListener("input", (e) => { stopPlay(); gotoStep(Number(e.target.value)); });
+
+// ================= 加载真实日志 =================
+$("btnLoad").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const raw = JSON.parse(reader.result);
+      if (Array.isArray(raw)) {
+        DATA = { records: raw, score_history: [], messages: [], requirement: "（来自上传日志）" };
+      } else {
+        DATA = raw;
+        DATA.score_history = DATA.score_history || [];
+        DATA.messages = DATA.messages || [];
+      }
+      // 纯日志数组没有 score_history 字段，从记录文本里把每轮评分捞回来
+      if (!DATA.score_history.length) {
+        const scores = [];
+        DATA.records.forEach((rec) => {
+          const m = String(rec.text || rec.message || "").match(/评分\s*(\d+)\s*\/\s*100/);
+          if (m) scores.push(parseInt(m[1], 10));
+        });
+        DATA.score_history = scores;
+      }
+      reset();
+      $("stepInfo").textContent = `已加载 ${file.name} · 共 ${DATA.records.length} 步`;
+    } catch (err) {
+      alert("日志文件解析失败：" + err.message);
+    }
+  };
+  reader.readAsText(file);
+});
+
+// ================= 启动 =================
+(async () => {
+  const cfg = await loadConfig();
+  buildGraph(cfg);
+  buildMechPanel();
+  await loadDemo();
+  if (location.hash === "#play") $("btnPlay").click();
+})().catch(() => {
+  $("log").innerHTML = '<div class="t-info">初始化失败，请点击「加载真实日志」选择 logs/workflow_*.json</div>';
+});
+</script>
+</body>
+</html>
