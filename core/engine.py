@@ -11,6 +11,29 @@ from core.state import WorkflowState
 END = "END"
 
 
+def validate_config(config: dict, registry: dict) -> None:
+    """启动时校验流程配置：配置写错立刻报错，而不是跑到一半才崩。"""
+    start = config.get("start")
+    if start not in registry:
+        raise ValueError(f"起点节点 [{start}] 未注册")
+    max_loops = config.get("max_loops", 3)
+    if not isinstance(max_loops, int) or max_loops < 1:
+        raise ValueError(f"max_loops 必须是正整数，当前为 {max_loops!r}")
+    edges = config.get("edges")
+    if not edges:
+        raise ValueError("配置缺少 edges（流程边定义）")
+    for edge in edges:
+        for key in ("from", "to"):
+            node = edge.get(key)
+            if node != END and node not in registry:
+                raise ValueError(f"流程边引用了未注册的节点 [{node}]：{edge}")
+    # 每个非 END 节点至少要有一条出边，否则流程走到它必然卡死
+    nodes_with_out = {e["from"] for e in edges}
+    for name in registry:
+        if name not in nodes_with_out:
+            raise ValueError(f"节点 [{name}] 没有任何出边，流程走到它会卡死")
+
+
 class WorkflowEngine:
     """配置驱动的工作流引擎：新增 Agent = 注册节点 + 配置里加边。"""
 
@@ -21,6 +44,7 @@ class WorkflowEngine:
                  "edges": [{"from":..., "to":..., "condition": "score >= 85"(可选)}]}
         registry: {节点名: 节点对象}，节点对象须有 name 属性和 run(state) 方法
         """
+        validate_config(config, registry)  # fail-fast：非法配置在启动时就拦住
         self.config = config
         self.registry = registry
         self.logger = logger
