@@ -42,7 +42,7 @@ def build_engine(logger, run_dir: str | None = None, config_override: dict | Non
     return WorkflowEngine(config, registry, logger, CHECKPOINT_PATH)
 
 
-def cmd_run(requirement: str, resume: bool, threshold: int) -> None:
+def cmd_run(requirement: str, resume: bool, threshold: int, max_loops: int | None) -> None:
     import time
 
     from core.logger import WorkflowLogger
@@ -65,6 +65,8 @@ def cmd_run(requirement: str, resume: bool, threshold: int) -> None:
 
     try:
         engine = build_engine(logger, run_dir)
+    except ValueError as e:
+        sys.exit(f"[配置错误] 工作流配置不合法：{e}\n请检查 config/workflow.json 后重试。")
     except RuntimeError as e:
         print(f"[配置错误] {e}")
         print("操作步骤：")
@@ -72,6 +74,9 @@ def cmd_run(requirement: str, resume: bool, threshold: int) -> None:
         print("  2. 编辑 .env，把 LLM_API_KEY 改成你的 Key")
         print("  3. 重新运行：python main.py run \"你的需求\"")
         sys.exit(1)
+
+    if max_loops is not None:
+        engine.max_loops = max_loops  # 命令行覆盖配置里的循环上限，不用改配置文件
 
     # 条件分支的阈值从命令行注入流程配置
     for edge in engine.config["edges"]:
@@ -93,7 +98,7 @@ def cmd_run(requirement: str, resume: bool, threshold: int) -> None:
     print(f"Agent 间消息：共 {len(state.messages)} 条")
 
     from report.report_generator import generate_workflow_report
-    report_path = generate_workflow_report(state)
+    report_path = generate_workflow_report(state, run_dir=run_dir)
     print(f"\n✅ Markdown 工作流报告已生成：{report_path}")
     print(f"📋 执行日志：{logger.log_path}")
     if os.path.exists(os.path.join(run_dir, "llm_calls.jsonl")):
@@ -109,9 +114,13 @@ def main() -> None:
                        help="需求描述（缺省使用内置示例需求）")
     p_run.add_argument("--resume", action="store_true", help="从上次检查点断点续跑")
     p_run.add_argument("--threshold", type=int, default=85, help="达标分数线，默认 85")
+    p_run.add_argument("--max-loops", type=int, default=None,
+                       help="单个节点的循环上限（覆盖 config/workflow.json 的 max_loops）")
     args = parser.parse_args()
 
     if args.command == "run":
+        if args.max_loops is not None and args.max_loops < 1:
+            sys.exit("[错误] --max-loops 必须是正整数。")
         requirement = args.requirement
         if not requirement:
             if not os.path.exists(DEFAULT_REQUIREMENT_FILE):
@@ -120,7 +129,7 @@ def main() -> None:
                 requirement = f.read().strip()
         if not requirement:
             sys.exit("[错误] 需求描述不能为空。")
-        cmd_run(requirement, args.resume, args.threshold)
+        cmd_run(requirement, args.resume, args.threshold, args.max_loops)
     else:
         parser.print_help()
 
