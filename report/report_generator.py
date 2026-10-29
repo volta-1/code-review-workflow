@@ -3,6 +3,7 @@
 与项目1的区别：报告对象从「单次审查输出」变为「完整工作流状态」，
 包含需求、每轮评分变化、最终审查结论、最终代码与 Agent 间消息流。
 """
+import json
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -20,8 +21,39 @@ def _score_bar(score: int) -> str:
     return "█" * filled + "░" * (10 - filled)
 
 
-def generate_workflow_report(state: "WorkflowState") -> str:
-    """根据 WorkflowState 生成报告，返回文件路径。"""
+def _run_stats(run_dir: str | None) -> str | None:
+    """从运行归档的 llm_calls.jsonl 统计 LLM 调用次数与耗时。
+
+    归档一行就是一次真实调用，首末两条的时间差即本次工作流的实际耗时——
+    报告里带上这行，被问"一次运行调几次 LLM、花多久"时直接有据可查。
+    """
+    if not run_dir:
+        return None
+    path = os.path.join(run_dir, "llm_calls.jsonl")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            records = [json.loads(line) for line in f if line.strip()]
+    except (OSError, json.JSONDecodeError):
+        return None  # 归档读不出来不阻断报告生成
+    if not records:
+        return None
+    calls = len(records)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    try:
+        start = datetime.strptime(records[0]["ts"], fmt)
+        end = datetime.strptime(records[-1]["ts"], fmt)
+        seconds = max(0, int((end - start).total_seconds()))
+        return f"LLM 调用 {calls} 次，耗时约 {seconds} 秒"
+    except (KeyError, ValueError):
+        return f"LLM 调用 {calls} 次"
+
+
+def generate_workflow_report(state: "WorkflowState", run_dir: str | None = None) -> str:
+    """根据 WorkflowState 生成报告，返回文件路径。
+
+    run_dir 传入本次运行归档目录时，报告头部会附带 LLM 调用统计。"""
     os.makedirs(REPORT_DIR, exist_ok=True)
     run_id = getattr(state, "run_id", "") or datetime.now().strftime("%Y%m%d_%H%M%S")
     report_path = os.path.join(REPORT_DIR, f"workflow_report_{run_id}.md")
@@ -42,7 +74,13 @@ def generate_workflow_report(state: "WorkflowState") -> str:
         f"- 生成时间：{now}",
         f"- 需求：{state.requirement}",
         f"- 协作 Agent：编码Agent → 审查Agent ⇄ 修复Agent",
-        f"- 审查轮次：{state.round} 轮（评分变化：{progression}）\n",
+        f"- 审查轮次：{state.round} 轮（评分变化：{progression}）",
+    ]
+    stats = _run_stats(run_dir)
+    if stats:
+        parts.append(f"- 运行统计：{stats}")
+    parts += [
+        "",
         "## 最终质量评分卡\n",
         "| 总分 | 评分 | 高危 | 中危 | 低危 |",
         "|------|------|------|------|------|",
