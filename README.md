@@ -124,7 +124,6 @@ python -m pytest tests/ -q
 
 ![消融实验汇总](images/ablation-table.png)
 
-<!-- 跑完 run_ablation.py 后，把 reports/ablation_report.md 里的表格粘贴到下面 -->
 
 ## 设计文档
 
