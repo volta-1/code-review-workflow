@@ -20,6 +20,7 @@
 - **循环控制**：修复后回到审查Agent 复审，单节点最多执行 3 次防死循环
 - **执行日志与状态追踪**：每节点开始/结束/摘要实时显示，JSON 日志落盘 logs/
 - **断点恢复**：每个节点完成后保存 checkpoint，崩溃后 `--resume` 续跑
+- **启动时配置校验**：流程配置写错（未注册节点、非法循环上限、节点无出边等）在启动时立即报错，不跑到一半才崩
 - **双层重试**：LLM 层仅对 429/5xx/网络错误退避重试（支持 Retry-After）；节点层对逻辑失败（JSON 解析等）再重试一次
 - **配置驱动流程**：改 config/workflow.json 即可调整流程，新增 Agent 只需三步
 
@@ -79,9 +80,10 @@ python main.py run
 # 4. 自定义需求
 python main.py run "写一个命令行贪吃蛇游戏"
 
-# 5. 崩溃后续跑 / 调整达标分数线
+# 5. 崩溃后续跑 / 调整达标分数线 / 调整循环上限
 python main.py run --resume
 python main.py run --threshold 90
+python main.py run --max-loops 5   # 覆盖 config/workflow.json 的 max_loops，不改配置文件
 ```
 
 ## 消融实验

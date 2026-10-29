@@ -45,5 +45,38 @@ class TestWorkflowReport(unittest.TestCase):
         os.unlink(path)
 
 
+class TestRunStats(unittest.TestCase):
+    def test_report_includes_llm_stats(self):
+        """传入运行归档目录时，报告头部应包含 LLM 调用次数与耗时。"""
+        import json
+        import tempfile
+        run_dir = tempfile.mkdtemp()
+        with open(os.path.join(run_dir, "llm_calls.jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": "2026-10-18 13:00:00", "system": "", "user": "", "reply": ""}) + "\n")
+            f.write(json.dumps({"ts": "2026-10-18 13:02:30", "system": "", "user": "", "reply": ""}) + "\n")
+        state = WorkflowState(requirement="统计测试", code="print(1)")
+        state.score = 90
+        state.score_history = [90]
+        state.review = {"score": 90, "summary": "好", "issues": []}
+        path = generate_workflow_report(state, run_dir=run_dir)
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("LLM 调用 2 次", content)
+        self.assertIn("150 秒", content)
+        os.unlink(path)
+
+    def test_report_without_run_dir_unchanged(self):
+        """不传 run_dir 时报告照常生成，不含运行统计行（兼容旧调用）。"""
+        state = WorkflowState(requirement="兼容测试", code="print(1)")
+        state.score = 80
+        state.score_history = [80]
+        state.review = {"score": 80, "summary": "好", "issues": []}
+        path = generate_workflow_report(state)
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertNotIn("运行统计", content)
+        os.unlink(path)
+
+
 if __name__ == "__main__":
     unittest.main()

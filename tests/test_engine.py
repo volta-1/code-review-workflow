@@ -122,10 +122,36 @@ class TestCheckpoint(unittest.TestCase):
         self.assertTrue(restored.finished)
 
     def test_missing_node_raises(self):
-        """配置引用了没注册的节点要报错，而不是静默跳过。"""
-        engine = make_engine([{"from": "a", "to": "ghost"}], {"a": MockNode("a")})
-        with self.assertRaises(RuntimeError):
-            engine.run(WorkflowState())
+        """配置引用了没注册的节点：启动校验直接拦下（fail-fast），不等到运行时。"""
+        with self.assertRaises(ValueError):
+            make_engine([{"from": "a", "to": "ghost"}], {"a": MockNode("a")})
+
+
+class TestConfigValidation(unittest.TestCase):
+    """启动时的配置校验：写错配置立刻报错，而不是跑到一半才崩。"""
+
+    def test_unknown_start_rejected(self):
+        with self.assertRaises(ValueError):
+            make_engine([{"from": "a", "to": "END"}], {"a": MockNode("a")}, start="ghost")
+
+    def test_bad_max_loops_rejected(self):
+        with self.assertRaises(ValueError):
+            make_engine([{"from": "a", "to": "END"}], {"a": MockNode("a")}, max_loops=0)
+
+    def test_missing_edges_rejected(self):
+        with self.assertRaises(ValueError):
+            WorkflowEngine({"start": "a"}, {"a": MockNode("a")}, QuietLogger(),
+                           tempfile.mktemp(suffix=".json"))
+
+    def test_node_without_out_edge_rejected(self):
+        """注册了但没有任何出边的节点，流程走到它会卡死，启动时就要拦。"""
+        with self.assertRaises(ValueError):
+            make_engine([{"from": "a", "to": "END"}],
+                        {"a": MockNode("a"), "b": MockNode("b")})
+
+    def test_valid_config_accepted(self):
+        engine = make_engine([{"from": "a", "to": "END"}], {"a": MockNode("a")})
+        self.assertEqual(engine.max_loops, 3)
 
 
 class TestConditionParser(unittest.TestCase):
